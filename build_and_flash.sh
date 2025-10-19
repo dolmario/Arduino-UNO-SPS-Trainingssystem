@@ -1,55 +1,100 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-INPUT="$1"                           # CSV/XML
-PORT="${2:-/dev/ttyUSB0}"            # default port
-NAME="$(basename "$INPUT" | sed 's/\..*$//')"   # Dateiname ohne Endung
-STAMP="$(date +%Y%m%d-%H%M%S)"
-OUTDIR="$HOME/logo2uno/generated/${NAME}_${STAMP}"
-TMPINO="${OUTDIR}/generated.ino"
-LOG_BUILD="${OUTDIR}/build.log"
-LOG_UPLD="${OUTDIR}/upload.log"
-META="${OUTDIR}/meta.yaml"
+# =========================================
+#  Build & Flash Pipeline
+#   - Parser (CSV/XML) → Generator → Compile → Upload
+#   - Logs & Artefakte in ~/logo2uno/generated/<name>_<ts>/
+# =========================================
 
+INSTALL_DIR="${INSTALL_DIR:-$HOME/logo2uno}"
+GEN_DIR="$INSTALL_DIR/generated"
+PROJECTS_DIR="$INSTALL_DIR/projects"
+CURRENT_LINK="$INSTALL_DIR/current"
+
+INPUT="${1:-}"
+PORT="${2:-}"
+
+if [ -z "$INPUT" ]; then
+  echo "Usage: $0 <projekt.csv|projekt.xml> [SERIAL_PORT]"
+  echo "Tipp: Ablage für Projekte: $PROJECTS_DIR"
+  exit 1
+fi
+
+if [ ! -f "$INPUT" ]; then
+  echo "❌ Datei nicht gefunden: $INPUT"
+  exit 1
+fi
+
+# Port automatisch raten, wenn nicht übergeben
+if [ -z "$PORT" ]; then
+  PORT=$( /usr/local/bin/arduino-cli board list | awk '/tty(USB|ACM)/ {print $1; exit}' || true )
+  if [ -z "$PORT" ]; then
+    echo "❌ Kein serieller Port gefunden. Bitte als 2. Argument angeben."
+    exit 1
+  fi
+fi
+
+# venv, falls vorhanden
+if [ -f "$INSTALL_DIR/.venv/bin/activate" ]; then
+  # shellcheck disable=SC1091
+  source "$INSTALL_DIR/.venv/bin/activate"
+fi
+
+mkdir -p "$GEN_DIR"
+BASENAME="$(basename "$INPUT")"
+NAME="${BASENAME%.*}"
+TS="$(date +%Y%m%d-%H%M%S)"
+OUTDIR="$GEN_DIR/${NAME}_${TS}"
 mkdir -p "$OUTDIR"
 
-# venv auto-activate falls vorhanden
-if [ -f "$HOME/logo2uno/venv/bin/activate" ]; then
-  source "$HOME/logo2uno/venv/bin/activate"
-fi
+TMPINO="$OUTDIR/${NAME}.ino"
+LOG_BUILD="$OUTDIR/build.log"
+LOG_UPLD="$OUTDIR/upload.log"
+META="$OUTDIR/meta.yaml"
 
-# 1) Parsen & Generieren
-echo "[*] Generiere Sketch..." | tee "$LOG_BUILD"
-python "$HOME/logo2uno/parser_logo.py" "$INPUT" > "${OUTDIR}/blocks.json" 2>>"$LOG_BUILD"
-python "$HOME/logo2uno/generator_arduino.py" "${OUTDIR}/blocks.json" "$TMPINO" 2>>"$LOG_BUILD"
+echo "==> Projekt: $INPUT"
+echo "==> Port:    $PORT"
+echo "==> Ausgabe: $OUTDIR"
 
-# 2) Kompilieren
-echo "[*] Kompiliere..." | tee -a "$LOG_BUILD"
-/usr/local/bin/arduino-cli compile --fqbn arduino:avr:uno "$TMPINO" 2>>"$LOG_BUILD"
+# 1) Parser-Analyse (CSV/XML)
+echo "🔎 Parsen…"
+python3 parser_logo.py "$INPUT" | tee "$LOG_BUILD"
 
-# 3) HEX finden (arduino-cli legt es im Sketch-Ordner ab)
-HEX_PATH="$(dirname "$TMPINO")/build/arduino.avr.uno/generated.ino.hex"
-if [ -f "$HEX_PATH" ]; then
-  cp "$HEX_PATH" "${OUTDIR}/firmware.hex"
-else
-  echo "HEX nicht gefunden!" | tee -a "$LOG_BUILD"
-fi
+# 2) Code-Generierung
+echo "🛠️  Code-Generierung → $TMPINO"
+python3 generator_arduino.py "$INPUT" > "$TMPINO"
+
+# 3) Kompilieren
+echo "🧱 Kompiliere (arduino:avr:uno)…"
+/usr/local/bin/arduino-cli compile \
+  --fqbn arduino:avr:uno \
+  --output-dir "$OUTDIR" \
+  "$TMPINO" >> "$LOG_BUILD" 2>&1
 
 # 4) Upload
-echo "[*] Flashe auf $PORT ..." | tee "$LOG_UPLD"
-/usr/local/bin/arduino-cli upload -p "$PORT" --fqbn arduino:avr:uno "$TMPINO" 2>>"$LOG_UPLD"
+echo "⬆️  Flashe auf $PORT…"
+/usr/local/bin/arduino-cli upload \
+  -p "$PORT" \
+  --fqbn arduino:avr:uno \
+  "$TMPINO" > "$LOG_UPLD" 2>&1
 
-# 5) Meta schreiben
+# 5) Meta + Symlink
+ARDVER="$(/usr/local/bin/arduino-cli version || echo unknown)"
 cat > "$META" <<EOF
-name: "$NAME"
-input: "$(realpath "$INPUT")"
+project: "$NAME"
+input: "$(realpath "$INPUT" 2>/dev/null || echo "$INPUT")"
 port: "$PORT"
-timestamp: "$STAMP"
-hardware_profile: "hardware_profile.yaml"
-arduino_cli_version: "$(/usr/local/bin/arduino-cli version | awk '{print $3}')"
+time: "$TS"
+arduino_cli: "$ARDVER"
+success: true
 EOF
 
-# 6) Symlink 'current' setzen
-ln -sfn "$OUTDIR" "$HOME/logo2uno/current"
+# current → letzter erfolgreicher Build
+ln -sfn "$OUTDIR" "$CURRENT_LINK"
 
-echo "✅ Fertig. Artefakte: $OUTDIR"
+echo "===================================="
+echo "✅ Build & Flash abgeschlossen."
+echo "  - HEX/Logs: $OUTDIR"
+echo "  - current:  $CURRENT_LINK"
+echo "===================================="
