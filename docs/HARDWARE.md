@@ -728,5 +728,19 @@ sudo usermod -a -G dialout $USER
 
 ## 📚 Weiterführende Links
 
-- [Arduino UNO Daten
+- [Arduino UNO Datenblatt](https://docs.arduino.cc/hardware/uno-rev3)
+- [ESP32 Pinout Reference](https://randomnerdtutorials.com/esp32-pinout-reference-gpios/)
+- [DS18B20 Sensor Guide](https://lastminuteengineers.com/ds18b20-arduino-tutorial/)
+- [MQ Gas Sensor Calibration](https://www.instructables.com/How-to-Calibrate-MQ-Sensors/)
+- [OneWire Library Docs](https://www.pjrc.com/teensy/td_libs_OneWire.html)
+
+---
+
+**Nächste Schritte:**
+1. Hardware aufbauen nach Verkabelungsplan
+2. `hardware_profile.yaml` an eigene Pins anpassen
+3. Test-Sketch flashen: `./build_and_flash.sh examples/test_all_io.csv`
+4. Mit LOGO! Soft eigene Programme entwickeln
+
+**Bei Fragen:** [GitHub Issues](https://github.com/dolmario/Arduino-UNO-SPS-Trainingssystem/issues)
 
