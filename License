@@ -1,0 +1,58 @@
+MIT License
+
+Copyright (c) 2025 (dolmario)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+## Zusätzliche Hinweise
+
+### Hardware-Haftung
+
+Die Nutzung dieses Systems mit realer Hardware erfolgt auf eigene Gefahr.
+Der Autor übernimmt keine Haftung für:
+- Schäden an Hardware-Komponenten
+- Elektrische Unfälle
+- Fehlfunktionen in produktiven Umgebungen
+- Verlust von Daten
+
+### Ausbildungszweck
+
+Dieses Projekt ist primär für Ausbildungszwecke konzipiert und getestet.
+Für den Einsatz in sicherheitskritischen oder produktiven Systemen ist eine
+umfassende Validierung und ggf. Zertifizierung erforderlich.
+
+### Elektrische Sicherheit
+
+Bei Arbeiten mit elektrischen Komponenten:
+- Nur qualifiziertes Personal (Elektrofachkräfte)
+- SELV-Spannungen bevorzugen (≤ 48V DC)
+- Keine 230V-Arbeiten ohne entsprechende Qualifikation
+- Lokale Vorschriften beachten (VDE, EN, IEC)
+
+### Markenrechte
+
+- LOGO! und LOGO! Soft Comfort sind eingetragene Marken der Siemens AG
+- Arduino ist eine eingetragene Marke der Arduino AG
+- Raspberry Pi ist eine eingetragene Marke der Raspberry Pi Foundation
+- ESP32 ist eine Marke von Espressif Systems
+
+Dieses Projekt ist nicht offiziell von den genannten Unternehmen unterstützt,
+gesponsert oder in anderer Weise verbunden.
