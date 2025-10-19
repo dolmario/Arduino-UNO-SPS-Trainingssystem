@@ -1,0 +1,34 @@
+# hardware_profile.yaml
+pins:
+  # Digital Inputs
+  I1: 9   # Taster 1
+  I2: 10  # Taster 2
+  I3: 16  # NOx Sensor digital (A2)
+  I4: 17  # CO₂ Sensor digital (A3)
+  
+  # Relais Outputs (Active LOW!)
+  Q1: 2   # Heizung ein/aus
+  Q2: 4   # Lüfter ein/aus
+  Q3: 5   # Licht
+  Q4: 7   # Alarm
+  
+  # PWM Outputs (Active HIGH!)
+  AO1_PWM: 3  # MOSFET Heizung stufenlos
+  AO2_PWM: 6  # MOSFET Lüfter stufenlos
+  
+  # Analog Inputs
+  AI1: A0  # CO₂ Sensor analog
+  AI2: A1  # NOx Sensor analog
+  
+  # Spezial
+  TEMP_DS18B20: 12
+  BUZZER: 8
+  LED_STATUS: 13
+  
+  # I2C
+  SDA: A4
+  SCL: A5
+
+flags:
+  relays_active_low: true
+  mosfet_active_low: false
