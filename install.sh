@@ -2,7 +2,7 @@
 # LOGO! → Arduino: Komplette Installation für Raspberry Pi
 # 
 # Installation:
-#   curl -fsSL https://raw.githubusercontent.com/DEIN-REPO/logo2uno/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/dolmario/Arduino-UNO-SPS-Trainingssystem/main/install.sh | bash
 #
 # Oder manuell:
 #   git clone https://github.com/dolmario/Arduino-UNO-SPS-Trainingssystem.git
