@@ -102,7 +102,7 @@ install_python_deps() {
     
     # Python Pakete
     pip3 install --user --upgrade pip
-    pip3 install --user pyyaml pyserial
+    pip3 install --break-system-packages pyyaml pyserial
     
     print_success "Python Dependencies installiert"
 }
