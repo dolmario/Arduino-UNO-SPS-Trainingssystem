@@ -1,61 +1,102 @@
 #!/usr/bin/env python3
 """
 LOGO! Soft Comfort CSV/XML Parser
-Konvertiert LOGO! Projekte in strukturiertes Python-Format
+Konvertiert LOGO! Projekte in strukturierte Python-Blöcke
 """
 
 import csv
 import yaml
 import sys
 from pathlib import Path
+import xml.etree.ElementTree as ET
+
+SUPPORTED_TYPES = {
+    # Logik
+    "AND", "OR", "NOT", "XOR", "NAND", "NOR",
+    # Speicher/Flanken
+    "SR", "RS", "R_TRIG", "F_TRIG",
+    # Timer
+    "TON", "TOF",
+    # Zähler
+    "CTU", "CTD", "CTUD",
+    # Vergleich/Mathe
+    "GT", "LT", "GE", "LE", "EQ", "NE", "ADD", "SUB", "MUL", "DIV",
+    # MOVE/ASSIGN
+    "MOVE"
+}
 
 def parse_logo_csv(filepath):
+    blocks = []
+    with open(filepath, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            block = {
+                'id': row.get('Block', '').strip(),
+                'type': row.get('Type', '').strip().upper(),
+                'inputs': [],
+                'output': (row.get('Output') or '').strip(),
+                'param': (row.get('Parameter') or '').strip()
+            }
+            for i in range(1, 16):
+                key = f'Input{i}'
+                if key in row and row[key] and row[key].strip():
+                    block['inputs'].append(row[key].strip())
+            if block['id']:
+                blocks.append(block)
+    return blocks
+
+def parse_logo_xml(filepath):
     """
-    Parst LOGO! CSV Export
-    
-    Erwartetes Format:
-    Block,Type,Input1,Input2,Output,Parameter
-    B001,AND,I1,I2,M1,
-    B002,TON,M1,,Q1,T#5s
+    Erwartete, einfache Struktur (angepasst an typische LOGO! XML Exporte):
+    <Project>
+      <Block id="B001" type="AND">
+        <Input name="Input1" ref="I1"/>
+        <Input name="Input2" ref="I2"/>
+        <Output ref="Q1"/>
+        <Param>T#5s</Param>
+      </Block>
+      ...
+    </Project>
     """
     blocks = []
-    
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            
-            for row in reader:
-                block = {
-                    'id': row.get('Block', '').strip(),
-                    'type': row.get('Type', '').strip().upper(),
-                    'inputs': [],
-                    'output': row.get('Output', '').strip(),
-                    'param': row.get('Parameter', '').strip()
-                }
-                
-                # Sammle alle Inputs (Input1, Input2, ...)
-                for i in range(1, 10):
-                    input_key = f'Input{i}'
-                    if input_key in row and row[input_key].strip():
-                        block['inputs'].append(row[input_key].strip())
-                
-                if block['id']:  # Nur valide Blöcke
-                    blocks.append(block)
-        
-        return blocks
-    
-    except FileNotFoundError:
-        print(f"❌ Fehler: Datei '{filepath}' nicht gefunden")
-        sys.exit(1)
-    except Exception as e:
-        print(f"❌ Fehler beim Parsen: {e}")
-        sys.exit(1)
+    tree = ET.parse(filepath)
+    root = tree.getroot()
+
+    # Versuche generisch Blöcke zu finden
+    for b in root.findall(".//Block"):
+        btype = (b.get("type") or "").strip().upper()
+        bid = (b.get("id") or "").strip()
+        inputs = []
+        output = ""
+        param = ""
+
+        # Inputs
+        for inp in b.findall(".//Input"):
+            ref = (inp.get("ref") or "").strip()
+            if ref:
+                inputs.append(ref)
+
+        # Output
+        out_elt = b.find(".//Output")
+        if out_elt is not None:
+            output = (out_elt.get("ref") or (out_elt.text or "")).strip()
+
+        # Param
+        p = b.find(".//Param")
+        if p is not None:
+            param = (p.text or "").strip()
+
+        if bid:
+            blocks.append({
+                "id": bid,
+                "type": btype,
+                "inputs": inputs,
+                "output": output,
+                "param": param
+            })
+    return blocks
 
 def get_all_variables(blocks):
-    """
-    Sammelt alle verwendeten Variablen
-    Kategorien: I (Input), Q (Output), M (Merker), AI/AO (Analog)
-    """
     variables = {
         'inputs': set(),
         'outputs': set(),
@@ -63,43 +104,45 @@ def get_all_variables(blocks):
         'analog_in': set(),
         'analog_out': set()
     }
-    
     for block in blocks:
-        # Inputs sammeln
         for inp in block['inputs']:
-            if inp.startswith('I') and not inp.startswith('AI'):
-                variables['inputs'].add(inp)
-            elif inp.startswith('AI'):
+            if inp.startswith('AI'):
                 variables['analog_in'].add(inp)
+            elif inp.startswith('I'):
+                variables['inputs'].add(inp)
             elif inp.startswith('M'):
                 variables['merkers'].add(inp)
-        
-        # Outputs sammeln
-        out = block['output']
-        if out.startswith('Q') and not out.startswith('AO'):
-            variables['outputs'].add(out)
-        elif out.startswith('AO'):
+        out = block['output'] or ""
+        if out.startswith('AO'):
             variables['analog_out'].add(out)
+        elif out.startswith('Q'):
+            variables['outputs'].add(out)
         elif out.startswith('M'):
             variables['merkers'].add(out)
-    
-    # Sortieren für konsistente Reihenfolge
     return {k: sorted(v) for k, v in variables.items()}
 
 def load_hardware_profile(yaml_path='hardware_profile.yaml'):
-    """Lädt Pin-Mapping aus YAML-Konfiguration"""
     try:
         with open(yaml_path, 'r') as f:
             return yaml.safe_load(f)
     except FileNotFoundError:
-        print(f"⚠️  Warnung: '{yaml_path}' nicht gefunden, nutze Defaults")
+        # sinnvolle Defaults für UNO-Trainingsplatz
         return {
             'pins': {
-                'I1': 9, 'I2': 10, 'I3': 16, 'I4': 17,
-                'Q1': 2, 'Q2': 4, 'Q3': 5, 'Q4': 7,
-                'AO1_PWM': 3, 'AO2_PWM': 6,
-                'AI1': 'A0', 'AI2': 'A1',
-                'TEMP_DS18B20': 12, 'BUZZER': 8, 'LED_STATUS': 13
+                # Digitale I/Os
+                'I1': 8, 'I2': 9, 'I3': 10, 'I4': 11,
+                'Q1': 2, 'Q2': 3, 'Q3': 4, 'Q4': 5, 'Q5': 6, 'Q6': 7, 'Q7': 12, 'Q8': 13,
+                # PWM/MOSFET
+                'AO1_PWM': 6, 'AO2_PWM': 5,
+                # Analog
+                'AI1': 'A0', 'AI2': 'A1', 'AI3': 'A2', 'AI4': 'A3',
+                # Sensoren/Special
+                'TEMP_DS18B20': 2,     # OneWire pin (anpassbar)
+                'BUZZER': 8,
+                # 7-Segment BCD (A,B,C,D)
+                'BCD_A': 14, 'BCD_B': 15, 'BCD_C': 16, 'BCD_D': 17,
+                # KY-040
+                'ENC_A': 18, 'ENC_B': 19, 'ENC_SW': 7
             },
             'flags': {
                 'relays_active_low': True,
@@ -108,43 +151,27 @@ def load_hardware_profile(yaml_path='hardware_profile.yaml'):
         }
 
 def validate_blocks(blocks):
-    """Prüft Blocks auf häufige Fehler"""
     errors = []
-    
-    supported_types = ['AND', 'OR', 'NOT', 'XOR', 'TON', 'TOF', 'SR', 'RS', 
-                       'CTU', 'CTD', 'CTUD', 'MOVE', 'ADD', 'SUB', 'MUL', 'DIV',
-                       'GT', 'LT', 'GE', 'LE', 'EQ', 'NE']
-    
-    for block in blocks:
-        # Typ prüfen
-        if block['type'] not in supported_types:
-            errors.append(f"⚠️  Block {block['id']}: Typ '{block['type']}' noch nicht unterstützt")
-        
-        # Inputs prüfen
-        if block['type'] in ['AND', 'OR', 'XOR'] and len(block['inputs']) < 2:
-            errors.append(f"❌ Block {block['id']}: {block['type']} benötigt mindestens 2 Inputs")
-        
-        # Output prüfen
-        if not block['output']:
-            errors.append(f"⚠️  Block {block['id']}: Kein Output definiert")
-    
+    for b in blocks:
+        t = b['type']
+        if t not in SUPPORTED_TYPES:
+            errors.append(f"⚠️  Block {b['id']}: Typ '{t}' (noch) nicht unterstützt")
+        if t in {"AND","OR","XOR","NAND","NOR"} and len(b['inputs']) < 2:
+            errors.append(f"❌ Block {b['id']}: {t} benötigt mindestens 2 Inputs")
+        if not b.get('output'):
+            errors.append(f"⚠️  Block {b['id']}: Kein Output definiert")
     return errors
 
 def print_summary(blocks, variables):
-    """Gibt Projekt-Zusammenfassung aus"""
     print(f"\n📊 Projekt-Analyse:")
     print(f"  Blöcke gesamt: {len(blocks)}")
-    print(f"\n  Block-Typen:")
-    
+    print("\n  Block-Typen:")
     type_count = {}
-    for block in blocks:
-        btype = block['type']
-        type_count[btype] = type_count.get(btype, 0) + 1
-    
-    for btype, count in sorted(type_count.items()):
-        print(f"    {btype}: {count}×")
-    
-    print(f"\n  Variablen:")
+    for b in blocks:
+        type_count[b['type']] = type_count.get(b['type'], 0) + 1
+    for k in sorted(type_count):
+        print(f"    {k}: {type_count[k]}×")
+    print("\n  Variablen:")
     print(f"    Digital Inputs:  {len(variables['inputs'])}")
     print(f"    Digital Outputs: {len(variables['outputs'])}")
     print(f"    Merker:          {len(variables['merkers'])}")
@@ -153,28 +180,25 @@ def print_summary(blocks, variables):
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print("Usage: python3 parser_logo.py <projekt.csv>")
+        print("Usage: python3 parser_logo.py <projekt.csv|projekt.xml>")
         sys.exit(1)
-    
-    csv_file = sys.argv[1]
-    print(f"🔍 Parse LOGO! Projekt: {csv_file}")
-    
-    # Parsen
-    blocks = parse_logo_csv(csv_file)
+    in_file = sys.argv[1]
+    print(f"🔍 Parse LOGO! Projekt: {in_file}")
+
+    suffix = Path(in_file).suffix.lower()
+    if suffix == ".xml":
+        blocks = parse_logo_xml(in_file)
+    else:
+        blocks = parse_logo_csv(in_file)
+
     variables = get_all_variables(blocks)
-    
-    # Validieren
     errors = validate_blocks(blocks)
     if errors:
         print("\n⚠️  Warnungen/Fehler:")
-        for err in errors:
-            print(f"  {err}")
-    
-    # Zusammenfassung
+        for e in errors:
+            print("  " + e)
     print_summary(blocks, variables)
-    
-    # Hardware-Profil laden
+
     hw = load_hardware_profile()
-    print(f"\n✅ Hardware-Profil geladen: {len(hw['pins'])} Pins definiert")
-    
-    print(f"\n✅ Parsing erfolgreich!")
+    print(f"\n✅ Hardware-Profil geladen (Pins: {len(hw.get('pins',{}))})")
+    print("\n✅ Parsing erfolgreich!")
