@@ -95,16 +95,52 @@ update_system() {
 # Python & Dependencies
 # ============================================
 install_python_deps() {
-    print_step "Installiere Python Dependencies..."
-    
-    # Python 3 + pip
-    $SUDO apt-get install -y python3 python3-pip python3-venv git curl wget
-    
-    # Python Pakete
-    pip3 install --user --upgrade pip
-    pip3 install --break-system-packages pyyaml pyserial
-    
-    print_success "Python Dependencies installiert"
+    print_step "Installiere Python & Dependencies (PEP-668-sicher)..."
+    # Basis
+    $SUDO apt-get install -y -qq python3 python3-full python3-pip python3-venv git curl wget
+
+    # Erst über APT (sauber unter Debian/RPi OS – vermeidet PEP 668)
+    # Namen unter Debian/RPi OS:
+    $SUDO apt-get install -y -qq python3-yaml python3-serial || true
+
+    # Prüfen, ob Module verfügbar sind; wenn nicht -> fallback auf venv
+    PY_OK=1
+    python3 - <<'PYCHECK' || PY_OK=0
+try:
+    import yaml, serial
+    print("OK")
+except Exception as e:
+    raise
+PYCHECK
+
+    if [ $PY_OK -eq 1 ]; then
+        print_success "Python-Module via APT vorhanden (pyyaml, pyserial)"
+        return
+    fi
+
+    print_info "APT-Module fehlen/zu alt – nutze virtuelle Umgebung (venv)"
+    cd "/home/$USER/logo2uno" || mkdir -p "/home/$USER/logo2uno" && cd "/home/$USER/logo2uno"
+
+    # venv anlegen
+    if [ ! -d venv ]; then
+        python3 -m venv venv
+    fi
+    source venv/bin/activate
+
+    # In venv mit pip (kein PEP-668-Problem)
+    pip install --upgrade pip
+    pip install pyyaml pyserial
+
+    # venv-Wrapper-Skript anlegen, damit andere Skripte immer die venv nutzen
+    cat > venv_python <<'EOF'
+#!/bin/bash
+DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$DIR/venv/bin/activate"
+exec python "$@"
+EOF
+    chmod +x venv_python
+
+    print_success "Python-Dependencies in venv installiert"
 }
 
 # ============================================
@@ -155,17 +191,32 @@ install_arduino_libs() {
 # ============================================
 setup_usb_permissions() {
     print_step "Richte USB-Berechtigungen ein..."
-    
-    # User zu dialout-Gruppe hinzufügen
-    $SUDO usermod -a -G dialout $USER
-    
-    # udev-Regel für Arduino
-    echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="2341", MODE="0666"' | $SUDO tee /etc/udev/rules.d/99-arduino.rules > /dev/null
+
+    # 1) User in die Gruppe 'dialout' (serieller Zugriff)
+    $SUDO usermod -a -G dialout "$USER"
+
+    # 2) udev-Regeln für verschiedene Arduino/Clone-Chips
+    #    SUBSYSTEM 'tty' ist hier korrekt, weil die seriellen Geräte als /dev/tty* erscheinen.
+    cat <<'UDEV' | $SUDO tee /etc/udev/rules.d/99-arduino.rules >/dev/null
+# Original Arduino (VID 2341 / 2a03)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", MODE="0666", GROUP="dialout"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2a03", MODE="0666", GROUP="dialout"
+# CH340/CH341 (meist UNO/Nano-Klone)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", MODE="0666", GROUP="dialout"
+# FTDI-Adapter
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", MODE="0666", GROUP="dialout"
+# CDC-ACM (generisch, z. B. Atmel)
+SUBSYSTEM=="tty", KERNEL=="ttyACM*", MODE="0666", GROUP="dialout"
+UDEV
+
+    # Regeln neu laden und auf bereits angesteckte Geräte anwenden
     $SUDO udevadm control --reload-rules
-    
+    $SUDO udevadm trigger
+
     print_success "USB-Berechtigungen konfiguriert"
-    print_info "Bitte nach Installation neu anmelden oder neu starten!"
+    print_info "Hinweis: Einmal ab- und wieder anmelden (oder reboot), damit die Gruppenmitgliedschaft aktiv wird."
 }
+
 
 # ============================================
 # Repository clonen
