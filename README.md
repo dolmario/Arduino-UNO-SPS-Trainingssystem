@@ -54,10 +54,10 @@ Dieses Projekt ermöglicht Azubis, SPS-Programme in der vertrauten LOGO! Soft Co
 
 ```bash
 # Komplett-Installation (empfohlen)
-curl -fsSL https://raw.githubusercontent.com/DEIN-USER/logo2uno/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ dolmario/ Arduino-UNO-SPS-Trainingssystem /main/install.sh | bash
 
 # Oder manuell
-git clone https://github.com/DEIN-USER/logo2uno.git
+git clone https://github.com/ dolmario /Arduino-UNO-SPS-Trainingssystem .git
 cd logo2uno
 chmod +x install.sh
 ./install.sh
