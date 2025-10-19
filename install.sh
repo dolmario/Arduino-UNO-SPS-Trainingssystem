@@ -5,7 +5,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/DEIN-REPO/logo2uno/main/install.sh | bash
 #
 # Oder manuell:
-#   git clone https://github.com/DEIN-REPO/logo2uno.git
+#   git clone https://github.com/dolmario/Arduino-UNO-SPS-Trainingssystem.git
 #   cd logo2uno
 #   chmod +x install.sh
 #   ./install.sh
@@ -182,7 +182,7 @@ setup_project() {
         git pull || true
     else
         # Clone Repository (ANPASSEN!)
-        # git clone https://github.com/DEIN-USER/logo2uno.git "$PROJECT_DIR"
+        # git clone https://github.com/dolmario/Arduino-UNO-SPS-Trainingssystem.git "$PROJECT_DIR"
         
         # Fallback: Erstelle Struktur manuell
         mkdir -p "$PROJECT_DIR"
