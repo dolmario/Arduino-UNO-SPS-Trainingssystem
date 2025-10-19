@@ -1,34 +1,105 @@
-# hardware_profile.yaml
+# Hardware Profile für Arduino UNO + 4-Relais + MOSFET Board
+# Projekt: LOGO! → Arduino SPS-Trainingssystem
+
+# ============================================
+# PIN MAPPING
+# ============================================
 pins:
-  # Digital Inputs
-  I1: 9   # Taster 1
-  I2: 10  # Taster 2
-  I3: 16  # NOx Sensor digital (A2)
-  I4: 17  # CO₂ Sensor digital (A3)
+  # Digital Inputs (mit Pull-Up, Active LOW)
+  I1: 9                    # Taster 1
+  I2: 10                   # Taster 2
+  I3: 16                   # NOx Sensor digital (A2 als Digital)
+  I4: 17                   # CO₂ Sensor digital (A3 als Digital)
   
-  # Relais Outputs (Active LOW!)
-  Q1: 2   # Heizung ein/aus
-  Q2: 4   # Lüfter ein/aus
-  Q3: 5   # Licht
-  Q4: 7   # Alarm
+  # Digital Outputs - Relais (Active LOW!)
+  Q1: 2                    # Relais 1 - Heizung ein/aus
+  Q2: 4                    # Relais 2 - Lüfter ein/aus
+  Q3: 5                    # Relais 3 - Licht
+  Q4: 7                    # Relais 4 - Alarm
   
-  # PWM Outputs (Active HIGH!)
-  AO1_PWM: 3  # MOSFET Heizung stufenlos
-  AO2_PWM: 6  # MOSFET Lüfter stufenlos
+  # PWM Outputs - MOSFET (Active HIGH!)
+  AO1_PWM: 3               # MOSFET 1 - Heizung stufenlos (0-255)
+  AO2_PWM: 6               # MOSFET 2 - Lüfter stufenlos (0-255)
   
-  # Analog Inputs
-  AI1: A0  # CO₂ Sensor analog
-  AI2: A1  # NOx Sensor analog
+  # Analog Inputs (10-bit: 0-1023)
+  AI1: A0                  # CO₂ Sensor analog (0-5V)
+  AI2: A1                  # NOx Sensor analog (0-5V)
   
-  # Spezial
-  TEMP_DS18B20: 12
-  BUZZER: 8
-  LED_STATUS: 13
+  # Spezial-Pins
+  TEMP_DS18B20: 12         # DS18B20 OneWire Temperatur
+  BUZZER: 8                # Piezo-Summer
+  LED_STATUS: 13           # Status-LED (eingebaut)
   
-  # I2C
+  # I2C Bus (für OLED Display, INA219, etc.)
   SDA: A4
   SCL: A5
 
+# ============================================
+# FLAGS (Hardware-Verhalten)
+# ============================================
 flags:
+  # Relais-Board ist Active LOW (LOW = EIN, HIGH = AUS)
   relays_active_low: true
+  
+  # MOSFET-Board ist Active HIGH (HIGH = EIN, LOW = AUS)
   mosfet_active_low: false
+  
+  # Taster mit Pull-Up (LOW = gedrückt)
+  buttons_pullup: true
+  
+  # Debug-Modus (Serial Output)
+  debug_serial: false
+
+# ============================================
+# SENSOR KALIBRIERUNG (optional)
+# ============================================
+calibration:
+  # CO₂ Sensor (MQ-135 oder ähnlich)
+  CO2_sensor:
+    min_adc: 0
+    max_adc: 1023
+    min_ppm: 400           # Frischluft
+    max_ppm: 5000          # Kritisch
+  
+  # NOx Sensor
+  NOx_sensor:
+    min_adc: 0
+    max_adc: 1023
+    min_ppm: 0
+    max_ppm: 100
+  
+  # DS18B20 Temperatur
+  temperature:
+    offset: 0.0            # Korrektur in °C
+
+# ============================================
+# TIMING (Zykluszeiten)
+# ============================================
+timing:
+  main_cycle_ms: 50        # 20 Hz (Standard für LOGO!)
+  temp_update_ms: 1000     # DS18B20 nur 1× pro Sekunde
+  status_led_ms: 1000      # Heartbeat-Blinken
+
+# ============================================
+# LIMITS (Sicherheitsgrenzen)
+# ============================================
+limits:
+  max_temp_celsius: 80     # Überhitzungsschutz
+  min_temp_celsius: -10
+  max_pwm: 255
+  min_pwm: 0
+
+# ============================================
+# HARDWARE REVISION
+# ============================================
+meta:
+  version: "1.0"
+  board: "Arduino UNO R3"
+  relay_module: "4-Channel 5V Relay"
+  mosfet_module: "IRF540 V4.0"
+  last_updated: "2025-01-19"
+  notes: |
+    - Relais-Board IN1-IN4 an D2,D4,D5,D7
+    - MOSFET PWM an D3,D6
+    - DS18B20 mit 4.7k Pull-Up an D12
+    - Taster zwischen Pin und GND (Pull-Up aktiv)
