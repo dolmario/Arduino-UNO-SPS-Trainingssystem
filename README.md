@@ -152,7 +152,6 @@ Alle Pin-Zuordnungen in `hardware_profile.yaml`:
 ```
 logo2uno/
 ├── install.sh              # Ein-Klick-Installation
-├── requirements.txt        # Python Dependencies
 ├── hardware_profile.yaml   # Pin-Mapping
 │
 ├── parser_logo.
