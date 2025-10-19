@@ -1,467 +1,401 @@
 #!/usr/bin/env python3
-"""
-Arduino Sketch Generator
-Übersetzt geparste LOGO! Blöcke in Arduino C++ Code
-"""
-
 import sys
-from datetime import datetime
+import yaml
 from pathlib import Path
-from parser_logo import parse_logo_csv, get_all_variables, load_hardware_profile
+from parser_logo import parse_logo_csv, parse_logo_xml, load_hardware_profile
 
-class ArduinoGenerator:
-    def __init__(self, hardware_profile):
-        self.hw = hardware_profile
-        self.timers = []
-        self.counters = []
-        self.flipflops = []
-    
-    def parse_time_param(self, param):
-        """
-        Konvertiert LOGO! Zeitformat in Millisekunden
-        T#5s → 5000, T#500ms → 500, T#2m → 120000
-        """
-        if not param or not param.startswith('T#'):
-            return 1000
-        
-        param = param.replace('T#', '').upper()
-        
-        if 'MS' in param:
-            return int(param.replace('MS', ''))
-        elif 'S' in param:
-            return int(param.replace('S', '')) * 1000
-        elif 'M' in param:
-            return int(param.replace('M', '')) * 60000
-        elif 'H' in param:
-            return int(param.replace('H', '')) * 3600000
-        
-        return 1000
-    
-    def generate_variables(self, variables):
-        """Generiert C++ Variable-Deklarationen"""
-        code = "// ============================================\n"
-        code += "// LOGO! VARIABLES\n"
-        code += "// ============================================\n"
-        
-        # Digital Inputs (werden aus Pins gelesen)
-        if variables['inputs']:
-            code += "// Digital Inputs (read from pins)\n"
-            for var in variables['inputs']:
-                code += f"bool {var} = false;\n"
-            code += "\n"
-        
-        # Digital Outputs (werden auf Pins geschrieben)
-        if variables['outputs']:
-            code += "// Digital Outputs (write to pins)\n"
-            for var in variables['outputs']:
-                code += f"bool {var} = false;\n"
-            code += "\n"
-        
-        # Merker (interne Variablen)
-        if variables['merkers']:
-            code += "// Merkers (internal flags)\n"
-            for var in variables['merkers']:
-                code += f"bool {var} = false;\n"
-            code += "\n"
-        
-        # Analog Inputs
-        if variables['analog_in']:
-            code += "// Analog Inputs (0-1023)\n"
-            for var in variables['analog_in']:
-                code += f"int {var} = 0;\n"
-            code += "\n"
-        
-        # Analog/PWM Outputs
-        if variables['analog_out']:
-            code += "// Analog/PWM Outputs (0-255)\n"
-            for var in variables['analog_out']:
-                code += f"int {var} = 0;\n"
-            code += "\n"
-        
-        return code
-    
-    def generate_timer_struct(self, timer_id, delay_ms, timer_type='TON'):
-        """Erzeugt Timer-Struktur (TON = On-Delay, TOF = Off-Delay)"""
-        self.timers.append({'id': timer_id, 'type': timer_type, 'delay': delay_ms})
-        
-        return f"""
-// Timer {timer_id} ({timer_type}): {delay_ms}ms
-struct Timer_{timer_id} {{
-    unsigned long start_time = 0;
-    bool running = false;
-    bool output = false;
-    const unsigned long delay = {delay_ms};
-    const char* type = "{timer_type}";
-}} {timer_id};
-"""
-    
-    def generate_counter_struct(self, counter_id, preset):
-        """Erzeugt Counter-Struktur (CTU = Up, CTD = Down)"""
-        self.counters.append({'id': counter_id, 'preset': preset})
-        
-        return f"""
-// Counter {counter_id}: Preset = {preset}
-struct Counter_{counter_id} {{
-    int count = 0;
-    int preset = {preset};
-    bool output = false;
-    bool last_input = false;
-}} {counter_id};
-"""
-    
-    def generate_flipflop_struct(self, ff_id):
-        """Erzeugt SR/RS Flipflop-Struktur"""
-        self.flipflops.append(ff_id)
-        
-        return f"""
-// Flipflop {ff_id}
-struct Flipflop_{ff_id} {{
-    bool output = false;
-}} {ff_id};
-"""
-    
-    def generate_logic(self, blocks):
-        """Übersetzt LOGO! Blocks in Arduino C++ Code"""
-        code = "  // ============================================\n"
-        code += "  // LOGO! LOGIC (generated from FUP)\n"
-        code += "  // ============================================\n\n"
-        
-        for block in blocks:
-            btype = block['type']
-            bid = block['id']
-            inputs = block['inputs']
-            output = block['output']
-            param = block['param']
-            
-            code += f"  // Block {bid}: {btype}\n"
-            
-            # === Logik-Bausteine ===
-            if btype == 'AND':
-                condition = ' && '.join(inputs)
-                code += f"  {output} = {condition};\n\n"
-            
-            elif btype == 'OR':
-                condition = ' || '.join(inputs)
-                code += f"  {output} = {condition};\n\n"
-            
-            elif btype == 'NOT':
-                code += f"  {output} = !{inputs[0]};\n\n"
-            
-            elif btype == 'XOR':
-                if len(inputs) == 2:
-                    code += f"  {output} = {inputs[0]} ^ {inputs[1]};\n\n"
-            
-            # === Timer ===
-            elif btype == 'TON':  # Timer On-Delay
-                in1 = inputs[0]
-                delay_ms = self.parse_time_param(param)
-                
-                code += f"""  // TON: Einschaltverzögerung {param}
-  if ({in1} && !{bid}.running) {{
-    {bid}.start_time = millis();
-    {bid}.running = true;
-  }}
-  if ({bid}.running) {{
-    if (millis() - {bid}.start_time >= {bid}.delay) {{
-      {bid}.output = true;
-    }}
-  }}
-  if (!{in1}) {{
-    {bid}.running = false;
-    {bid}.output = false;
-  }}
-  {output} = {bid}.output;
+TEMPLATE_HEADER = r"""
+/*
+ * Auto-generated by generator_arduino.py
+ * Target: Arduino UNO (arduino:avr:uno)
+ *
+ * Unterstützte Blöcke: AND, OR, NOT, XOR, NAND, NOR,
+ * SR, RS, R_TRIG, F_TRIG,
+ * TON, TOF,
+ * CTU, CTD,
+ * GT, LT, GE, LE, EQ, NE,
+ * ADD, SUB, MUL, DIV,
+ * MOVE
+ *
+ * Hardware: Relais Q1..Q8, MOSFET PWM (AO*_PWM),
+ * DS18B20, Buzzer, MQ-2/3/7/135 (analog), KY-040, 7-Segment BCD.
+ */
 
-"""
-            
-            elif btype == 'TOF':  # Timer Off-Delay
-                in1 = inputs[0]
-                delay_ms = self.parse_time_param(param)
-                
-                code += f"""  // TOF: Ausschaltverzögerung {param}
-  if (!{in1} && !{bid}.running) {{
-    {bid}.start_time = millis();
-    {bid}.running = true;
-  }}
-  if ({bid}.running) {{
-    if (millis() - {bid}.start_time >= {bid}.delay) {{
-      {bid}.output = false;
-    }} else {{
-      {bid}.output = true;
-    }}
-  }}
-  if ({in1}) {{
-    {bid}.running = false;
-    {bid}.output = true;
-  }}
-  {output} = {bid}.output;
+#include <Arduino.h>
 
-"""
-            
-            # === Flipflops ===
-            elif btype == 'SR':  # Set-Reset (Set dominant)
-                set_input = inputs[0] if len(inputs) > 0 else 'false'
-                reset_input = inputs[1] if len(inputs) > 1 else 'false'
-                code += f"""  if ({set_input}) {bid}.output = true;
-  if ({reset_input}) {bid}.output = false;
-  {output} = {bid}.output;
+// ----- Optional Sensors / HW -----
+#ifdef USE_ONEWIRE
+  #include <OneWire.h>
+  #include <DallasTemperature.h>
+#endif
 
-"""
-            
-            elif btype == 'RS':  # Reset-Set (Reset dominant)
-                set_input = inputs[0] if len(inputs) > 0 else 'false'
-                reset_input = inputs[1] if len(inputs) > 1 else 'false'
-                code += f"""  if ({reset_input}) {bid}.output = false;
-  if ({set_input}) {bid}.output = true;
-  {output} = {bid}.output;
+#ifdef USE_ENCODER
+  #include <Encoder.h>
+#endif
 
+// ---- Konfiguration (aus YAML injiziert) ----
 """
-            
-            # === Counter ===
-            elif btype == 'CTU':  # Count Up
-                cu_input = inputs[0]
-                preset = int(param) if param.isdigit() else 10
-                
-                code += f"""  // CTU: Vorwärtszähler bis {preset}
-  if ({cu_input} && !{bid}.last_input) {{
-    {bid}.count++;
-  }}
-  {bid}.last_input = {cu_input};
-  {bid}.output = ({bid}.count >= {bid}.preset);
-  {output} = {bid}.output;
 
-"""
-            
-            # === Vergleicher ===
-            elif btype == 'GT':  # Greater Than
-                code += f"  {output} = ({inputs[0]} > {inputs[1]});\n\n"
-            
-            elif btype == 'LT':  # Less Than
-                code += f"  {output} = ({inputs[0]} < {inputs[1]});\n\n"
-            
-            elif btype == 'GE':  # Greater Equal
-                code += f"  {output} = ({inputs[0]} >= {inputs[1]});\n\n"
-            
-            elif btype == 'LE':  # Less Equal
-                code += f"  {output} = ({inputs[0]} <= {inputs[1]});\n\n"
-            
-            elif btype == 'EQ':  # Equal
-                code += f"  {output} = ({inputs[0]} == {inputs[1]});\n\n"
-            
-            else:
-                code += f"  // ⚠️ TODO: {btype} noch nicht implementiert\n\n"
-        
-        return code
-    
-    def generate_read_inputs(self):
-        """Generiert Code zum Lesen der Inputs"""
-        pins = self.hw['pins']
-        code = "  // ============================================\n"
-        code += "  // READ INPUTS\n"
-        code += "  // ============================================\n"
-        
-        # Digital Inputs (Active LOW mit Pull-Up)
-        for name, pin in pins.items():
-            if name.startswith('I') and not name.startswith('AI'):
-                code += f"  {name} = !digitalRead({pin});  // Active LOW\n"
-        
-        # Analog Inputs
-        for name, pin in pins.items():
-            if name.startswith('AI'):
-                code += f"  {name} = analogRead({pin});  // 0-1023\n"
-        
-        # Temperatur Sensor
-        code += """
-  // Temperature Sensor (DS18B20)
-  sensors.requestTemperatures();
-  float TEMP = sensors.getTempCByIndex(0);
-"""
-        
-        return code + "\n"
-    
-    def generate_write_outputs(self):
-        """Generiert Code zum Schreiben der Outputs"""
-        pins = self.hw['pins']
-        flags = self.hw['flags']
-        
-        code = "  // ============================================\n"
-        code += "  // WRITE OUTPUTS\n"
-        code += "  // ============================================\n"
-        
-        # Digital Outputs (Relais)
-        relays_active_low = flags.get('relays_active_low', True)
-        for name, pin in pins.items():
-            if name.startswith('Q'):
-                if relays_active_low:
-                    code += f"  digitalWrite({pin}, !{name});  // Active LOW\n"
-                else:
-                    code += f"  digitalWrite({pin}, {name});\n"
-        
-        # PWM Outputs
-        mosfet_active_low = flags.get('mosfet_active_low', False)
-        for name, pin in pins.items():
-            if 'PWM' in name:
-                if mosfet_active_low:
-                    code += f"  analogWrite({pin}, 255 - {name});  // Active LOW\n"
-                else:
-                    code += f"  analogWrite({pin}, {name});  // 0-255\n"
-        
-        # Status LED (blinkt bei jedem Zyklus)
-        code += """
-  // Status LED (heartbeat)
-  static unsigned long lastBlink = 0;
-  if (millis() - lastBlink > 1000) {
-    digitalWrite(LED_STATUS, !digitalRead(LED_STATUS));
-    lastBlink = millis();
+TEMPLATE_FOOTER = r"""
+// ======= Hilfsfunktionen =======
+
+int toBool(int v){ return v ? HIGH : LOW; }
+int fromBool(int v){ return (v==HIGH)?1:0; }
+
+// ======= LOGO-Laufzeit =======
+
+struct TON {
+  unsigned long pt_ms;
+  bool q;
+  unsigned long start;
+  TON() : pt_ms(0), q(false), start(0) {}
+  bool eval(bool in) {
+    if (!in){ q=false; start=0; return q; }
+    if (start==0) start=millis();
+    if ((millis()-start)>=pt_ms) q=true;
+    return q;
   }
+};
+
+struct TOF {
+  unsigned long pt_ms;
+  bool q;
+  unsigned long off;
+  TOF(): pt_ms(0), q(false), off(0) {}
+  bool eval(bool in){
+    if (in){ q=true; off=0; return q; }
+    if (q && off==0) off=millis();
+    if (q && (millis()-off)>=pt_ms) q=false;
+    return q;
+  }
+};
+
+struct R_TRIG { bool last=false; bool eval(bool in){ bool r=in && !last; last=in; return r; } };
+struct F_TRIG { bool last=false; bool eval(bool in){ bool f=!in && last; last=in; return f; } };
+
+struct CTU {
+  long cv=0; long pv=1; bool q=false;
+  long eval(bool cu, bool r){
+    if (r){ cv=0; q=false; return cv; }
+    if (cu){ cv++; if (cv>=pv) q=true; }
+    return cv;
+  }
+};
+
+struct CTD {
+  long cv=0; long pv=1; bool q=false;
+  long eval(bool cd, bool l){
+    if (l){ cv=pv; q=true; return cv; }
+    if (cd){ cv--; if (cv<=0) q=false; }
+    return cv;
+  }
+};
+
+// ======= Variablen (werden im Generator gefüllt) =======
 """
-        
-        return code + "\n"
-    
-    def generate_init_code(self):
-        """Generiert Initialisierungs-Code für setup()"""
-        pins = self.hw['pins']
-        flags = self.hw['flags']
-        code = ""
-        
-        # Relais initial ausschalten
-        if flags.get('relays_active_low', True):
-            code += "  // Init Relays OFF (Active LOW)\n"
-            for name, pin in pins.items():
-                if name.startswith('Q'):
-                    code += f"  digitalWrite({pin}, HIGH);\n"
-        
-        return code
-    
-    def generate_sketch(self, blocks, project_name='Generated', template_path='template.ino'):
-        """Generiert kompletten Arduino Sketch"""
-        
-        # Variablen sammeln
-        variables = get_all_variables(blocks)
-        
-        # Spezial-Strukturen sammeln
-        timer_code = ""
-        counter_code = ""
-        ff_code = ""
-        
-        for block in blocks:
-            if block['type'] in ['TON', 'TOF']:
-                delay_ms = self.parse_time_param(block['param'])
-                timer_code += self.generate_timer_struct(block['id'], delay_ms, block['type'])
-            
-            elif block['type'] in ['CTU', 'CTD']:
-                preset = int(block['param']) if block['param'].isdigit() else 10
-                counter_code += self.generate_counter_struct(block['id'], preset)
-            
-            elif block['type'] in ['SR', 'RS']:
-                ff_code += self.generate_flipflop_struct(block['id'])
-        
-        structures_code = timer_code + counter_code + ff_code
-        
-        # Template laden
-        try:
-            with open(template_path, 'r') as f:
-                template = f.read()
-        except FileNotFoundError:
-            print(f"⚠️  Template '{template_path}' nicht gefunden, nutze Minimal-Template")
-            template = self._get_minimal_template()
-        
-        # Platzhalter ersetzen
-        sketch = template.replace('{PROJECT_NAME}', project_name)
-        sketch = sketch.replace('{TIMESTAMP}', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        sketch = sketch.replace('{GENERATED_VARIABLES}', self.generate_variables(variables))
-        sketch = sketch.replace('{GENERATED_TIMERS}', structures_code)
-        sketch = sketch.replace('{GENERATED_INIT}', self.generate_init_code())
-        sketch = sketch.replace('{GENERATED_READ_INPUTS}', self.generate_read_inputs())
-        sketch = sketch.replace('{GENERATED_LOGIC}', self.generate_logic(blocks))
-        sketch = sketch.replace('{GENERATED_WRITE_OUTPUTS}', self.generate_write_outputs())
-        sketch = sketch.replace('{GENERATED_FUNCTIONS}', '// No custom functions yet')
-        
-        return sketch
-    
-    def _get_minimal_template(self):
-        """Fallback: Minimales Template wenn Datei fehlt"""
-        return """// Generated Arduino Sketch
-// Project: {PROJECT_NAME}
-// Generated: {TIMESTAMP}
 
-#include <OneWire.h>
-#include <DallasTemperature.h>
+def load_hw():
+    try:
+        return load_hardware_profile()
+    except Exception:
+        return {'pins': {}, 'flags': {}}
 
-// Pin Definitions (Standard)
-#define I1 9
-#define I2 10
-#define Q1 2
-#define Q2 4
-#define TEMP_PIN 12
-#define LED_STATUS 13
+def parse_blocks(in_file):
+    suffix = Path(in_file).suffix.lower()
+    if suffix == ".xml":
+        return parse_logo_xml(in_file)
+    return parse_logo_csv(in_file)
 
-OneWire oneWire(TEMP_PIN);
-DallasTemperature sensors(&oneWire);
+def parse_time_param(p):
+    # LOGO Zeitformat T#5s, T#200ms etc.
+    if not p or 'T#' not in p:
+        return 0
+    t = p.strip().upper().replace('T#', '')
+    if t.endswith('MS'):
+        return int(t[:-2])
+    if t.endswith('S'):
+        return int(float(t[:-1])*1000)
+    if t.endswith('M'):
+        return int(float(t[:-1])*60000)
+    if t.endswith('H'):
+        return int(float(t[:-1])*3600000)
+    try:
+        return int(t)
+    except:
+        return 0
 
-{GENERATED_VARIABLES}
+def emit_pins(hw):
+    pins = hw.get('pins', {})
+    flags = hw.get('flags', {})
+    lines = []
+    lines.append("// Pins aus hardware_profile.yaml (falls vorhanden)")
+    for k,v in pins.items():
+        if isinstance(v, str) and v.upper().startswith('A'):
+            # analog als Nummer abbilden
+            anum = 14 + int(v[1:])  # A0=14 beim UNO
+            lines.append(f"const uint8_t PIN_{k} = {anum}; // {v}")
+        else:
+            lines.append(f"const uint8_t PIN_{k} = {v};")
+    lines.append(f"const bool RELAYS_ACTIVE_LOW = {'true' if flags.get('relays_active_low', False) else 'false'};")
+    lines.append(f"const bool MOSFET_ACTIVE_LOW = {'true' if flags.get('mosfet_active_low', False) else 'false'};")
+    return "\n".join(lines) + "\n"
 
-{GENERATED_TIMERS}
+def needs(libflag, hw):
+    pins = hw.get('pins', {})
+    if libflag == "USE_ONEWIRE":
+        return "TEMP_DS18B20" in pins
+    if libflag == "USE_ENCODER":
+        return "ENC_A" in pins and "ENC_B" in pins
+    return False
 
-void setup() {
-  pinMode(I1, INPUT_PULLUP);
-  pinMode(I2, INPUT_PULLUP);
-  pinMode(Q1, OUTPUT);
-  pinMode(Q2, OUTPUT);
-  pinMode(LED_STATUS, OUTPUT);
-  
-  {GENERATED_INIT}
-  
-  sensors.begin();
+def emit_macros(hw):
+    macros = []
+    if needs("USE_ONEWIRE", hw): macros.append("#define USE_ONEWIRE 1")
+    if needs("USE_ENCODER", hw): macros.append("#define USE_ENCODER 1")
+    return ("\n".join(macros) + "\n") if macros else "\n"
+
+def emit_setup(hw):
+    pins = hw.get('pins', {})
+    lines = []
+    lines.append("void setup(){")
+    lines.append("  // IO Richtungen")
+    # Inputs (I1..I8?) als INPUT_PULLUP – Trainingsaufbau
+    for name,p in pins.items():
+        if name.startswith('I'):
+            lines.append(f"  pinMode(PIN_{name}, INPUT_PULLUP);")
+    # Outputs Q1..Q8 Relais
+    for q in [k for k in pins.keys() if k.startswith('Q')]:
+        lines.append(f"  pinMode(PIN_{q}, OUTPUT); digitalWrite(PIN_{q}, RELAYS_ACTIVE_LOW?HIGH:LOW);")
+    # PWM/MOSFET
+    for ao in [k for k in pins.keys() if k.startswith('AO')]:
+        lines.append(f"  pinMode(PIN_{ao}, OUTPUT); analogWrite(PIN_{ao}, MOSFET_ACTIVE_LOW?255:0);")
+    # Buzzer
+    if "BUZZER" in pins:
+        lines.append("  pinMode(PIN_BUZZER, OUTPUT); digitalWrite(PIN_BUZZER, LOW);")
+    # 7-Segment BCD
+    for bcd in ["BCD_A","BCD_B","BCD_C","BCD_D"]:
+        if bcd in pins:
+            lines.append(f"  pinMode(PIN_{bcd}, OUTPUT); digitalWrite(PIN_{bcd}, LOW);")
+    # Encoder
+    if needs("USE_ENCODER", hw):
+        lines.append("  // Encoder initialisiert in globalem Bereich")
+    # DS18B20
+    if needs("USE_ONEWIRE", hw):
+        lines.append("  oneWire.begin(PIN_TEMP_DS18B20);")
+        lines.append("  sensors.setOneWire(&oneWire); sensors.begin();")
+    lines.append("  Serial.begin(115200);")
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+def emit_globals(hw):
+    lines = []
+    if needs("USE_ONEWIRE", hw):
+        lines.append("OneWire oneWire(PIN_TEMP_DS18B20);")
+        lines.append("DallasTemperature sensors(&oneWire);")
+        lines.append("float tempC = 0.0;")
+    if needs("USE_ENCODER", hw):
+        lines.append("Encoder enc(PIN_ENC_A, PIN_ENC_B); long encPos=0;")
+    # Analog MQ Sensoren werden einfach über AI* gelesen -> keine Lib nötig.
+    return "\n".join(lines) + "\n"
+
+def emit_bcd_write():
+    return r"""
+void bcdWrite(uint8_t val){
+  // erwartet 0..15
+  digitalWrite(PIN_BCD_A, (val>>0)&1);
+  digitalWrite(PIN_BCD_B, (val>>1)&1);
+  digitalWrite(PIN_BCD_C, (val>>2)&1);
+  digitalWrite(PIN_BCD_D, (val>>3)&1);
 }
-
-void loop() {
-{GENERATED_READ_INPUTS}
-
-{GENERATED_LOGIC}
-
-{GENERATED_WRITE_OUTPUTS}
-  
-  delay(50); // 20 Hz cycle
-}
-
-{GENERATED_FUNCTIONS}
 """
+
+def emit_loop_header():
+    return "void loop(){\n"
+
+def emit_loop_footer():
+    return "  delay(5);\n}\n"
+
+def gen_from_blocks(blocks, hw):
+    """
+    Einfache Verdrahtung:
+    - Eingänge I*, AI* werden gelesen
+    - Merker M* sind bool-Variablen
+    - Ausgänge Q*/AO* werden gesetzt
+    - Blockliste wird seriell ausgewertet (Datenfluss)
+    """
+    lines = []
+    # Deklarationen
+    inputs = sorted({i for b in blocks for i in b['inputs'] if i})
+    outputs = sorted({b['output'] for b in blocks if b.get('output')})
+    merkers = sorted({s for s in inputs+outputs if s and s.startswith('M')})
+    # Variablen
+    for m in merkers:
+        lines.append(f"static bool {m}=false;")
+    # Timer/Trig/Ctr Instanzen anhand der Blöcke
+    ton_idx = tof_idx = r_idx = f_idx = ctu_idx = ctd_idx = 0
+
+    # Zuordnung Block -> interne Namen
+    inst_map = {}
+
+    # Eingänge/Analoge lesen
+    lines.append("\n  // Eingänge lesen")
+    for i in sorted({i for i in inputs if i and i.startswith('I')}):
+        pin = f"PIN_{i}"
+        lines.append(f"  bool {i}_val = (digitalRead({pin})==HIGH);")
+    for ai in sorted({i for i in inputs if i and i.startswith('AI')}):
+        pin = f"PIN_{ai}"
+        lines.append(f"  int {ai}_raw = analogRead({pin});")
+
+    # DS18B20 optional
+    lines.append("")
+    lines.append("  // Optional: Temperatursensor")
+    if needs("USE_ONEWIRE", hw):
+        lines.append("  sensors.requestTemperatures();")
+        lines.append("  tempC = sensors.getTempCByIndex(0);")
+
+    lines.append("\n  // Blöcke auswerten")
+    for b in blocks:
+        t = b['type']
+        bid = b['id']
+        ins = [f"({s}_val)" if s.startswith('I') else
+               f"({s})" if s.startswith('M') else
+               f"({s}_raw)" if s.startswith('AI') else
+               "0"
+               for s in b['inputs']]
+        out = b['output']
+
+        if t in {"AND","OR","XOR","NAND","NOR","NOT"}:
+            expr = ""
+            if t=="AND": expr = " && ".join(ins) if ins else "0"
+            elif t=="OR": expr = " || ".join(ins) if ins else "0"
+            elif t=="XOR": expr = " ^ ".join([f"({x})" for x in ins]) if ins else "0"
+            elif t=="NAND": expr = "!(" + (" && ".join(ins) if ins else "0") + ")"
+            elif t=="NOR": expr = "!(" + (" || ".join(ins) if ins else "0") + ")"
+            elif t=="NOT": expr = "!(" + (ins[0] if ins else "0") + ")"
+            if out.startswith('M'):
+                lines.append(f"  {out} = ({expr}); // {bid} {t}")
+            elif out.startswith('Q'):
+                pin = f"PIN_{out}"
+                lines.append(f"  digitalWrite({pin}, ({expr}) ? (RELAYS_ACTIVE_LOW?LOW:HIGH):(RELAYS_ACTIVE_LOW?HIGH:LOW)); // {bid} {t}")
+            elif out.startswith('AO'):
+                pin = f"PIN_{out}"
+                lines.append(f"  analogWrite({pin}, ({expr}) ? (MOSFET_ACTIVE_LOW?0:255):(MOSFET_ACTIVE_LOW?255:0)); // {bid} {t}")
+
+        elif t in {"SR","RS"}:
+            s = ins[0] if len(ins)>0 else "0"
+            r = ins[1] if len(ins)>1 else "0"
+            if out.startswith('M'):
+                if t=="SR":
+                    lines.append(f"  if ({r}) {out}=false; if ({s}) {out}=true; // {bid} SR")
+                else:
+                    lines.append(f"  if ({s}) {out}=true; if ({r}) {out}=false; // {bid} RS")
+            elif out.startswith('Q'):
+                pin = f"PIN_{out}"
+                var = f"m_{out}"
+                lines.append(f"  static bool {var}=false; if ({r}) {var}=false; if ({s}) {var}=true;")
+                lines.append(f"  digitalWrite({pin}, {var} ? (RELAYS_ACTIVE_LOW?LOW:HIGH):(RELAYS_ACTIVE_LOW?HIGH:LOW)); // {bid} {t}")
+
+        elif t in {"R_TRIG","F_TRIG"}:
+            if t=="R_TRIG":
+                name=f"_rt{r_idx}"; r_idx+=1
+                lines.append(f"  static R_TRIG {name}; bool {bid}_q = {name}.eval({ins[0] if ins else '0'});")
+            else:
+                name=f"_ft{f_idx}"; f_idx+=1
+                lines.append(f"  static F_TRIG {name}; bool {bid}_q = {name}.eval({ins[0] if ins else '0'});")
+            if out.startswith('M'): lines.append(f"  {out} = {bid}_q;")
+            elif out.startswith('Q'):
+                pin=f"PIN_{out}"
+                lines.append(f"  digitalWrite({pin}, {bid}_q ? (RELAYS_ACTIVE_LOW?LOW:HIGH):(RELAYS_ACTIVE_LOW?HIGH:LOW));")
+
+        elif t in {"TON","TOF"}:
+            pt_ms = parse_time_param(b.get('param',''))
+            if t=="TON":
+                name=f"_ton{ton_idx}"; ton_idx+=1
+                lines.append(f"  static TON {name}; {name}.pt_ms={pt_ms}; bool {bid}_q = {name}.eval({ins[0] if ins else '0'});")
+            else:
+                name=f"_tof{tof_idx}"; tof_idx+=1
+                lines.append(f"  static TOF {name}; {name}.pt_ms={pt_ms}; bool {bid}_q = {name}.eval({ins[0] if ins else '0'});")
+            if out.startswith('M'): lines.append(f"  {out} = {bid}_q;")
+            elif out.startswith('Q'):
+                pin=f"PIN_{out}"
+                lines.append(f"  digitalWrite({pin}, {bid}_q ? (RELAYS_ACTIVE_LOW?LOW:HIGH):(RELAYS_ACTIVE_LOW?HIGH:LOW));")
+
+        elif t in {"GT","LT","GE","LE","EQ","NE"}:
+            a = ins[0] if len(ins)>0 else "0"
+            b2 = ins[1] if len(ins)>1 else "0"
+            op = {"GT":">","LT":"<","GE":">=","LE":"<=","EQ":"==","NE":"!="}[t]
+            expr = f"({a}) {op} ({b2})"
+            target = out
+            if target.startswith('M'):
+                lines.append(f"  {target} = ({expr}); // {bid} {t}")
+            elif target.startswith('Q'):
+                pin=f"PIN_{target}"
+                lines.append(f"  digitalWrite({pin}, ({expr}) ? (RELAYS_ACTIVE_LOW?LOW:HIGH):(RELAYS_ACTIVE_LOW?HIGH:LOW));")
+
+        elif t in {"ADD","SUB","MUL","DIV","MOVE"}:
+            a = ins[0] if len(ins)>0 else "0"
+            b2 = ins[1] if len(ins)>1 else "0"
+            expr = {"ADD":f"({a})+({b2})",
+                    "SUB":f"({a})-({b2})",
+                    "MUL":f"({a})*({b2})",
+                    "DIV":f"(({b2})!=0?({a})/({b2}):0)",
+                    "MOVE":f"({a})"}[t]
+            # Nur AO*/AI*/Merker sinnvoll als Variable; Q ist bool
+            if out.startswith('M'):
+                lines.append(f"  {out} = ({expr}) != 0; // {bid} {t} -> bool")
+            elif out.startswith('AO'):
+                pin=f"PIN_{out}"
+                lines.append(f"  {{ long __v = ({expr}); if (__v<0) __v=0; if (__v>255) __v=255; analogWrite({pin}, MOSFET_ACTIVE_LOW?(255-__v):__v); }} // {bid} {t}")
+            elif out.startswith('Q'):
+                pin=f"PIN_{out}"
+                lines.append(f"  digitalWrite({pin}, (({expr})!=0) ? (RELAYS_ACTIVE_LOW?LOW:HIGH):(RELAYS_ACTIVE_LOW?HIGH:LOW)); // {bid} {t}")
+
+        elif t in {"CTU","CTD"}:
+            if t=="CTU":
+                name=f"_ctu{ctu_idx}"; ctu_idx+=1
+                lines.append(f"  static CTU {name}; {name}.pv=10; long {bid}_cv = {name}.eval({ins[0] if ins else '0'}, {ins[1] if len(ins)>1 else '0'});")
+            else:
+                name=f"_ctd{ctd_idx}"; ctd_idx+=1
+                lines.append(f"  static CTD {name}; {name}.pv=10; long {bid}_cv = {name}.eval({ins[0] if ins else '0'}, {ins[1] if len(ins)>1 else '0'});")
+            if out.startswith('M'):
+                lines.append(f"  {out} = {name}.q;")
+
+        else:
+            lines.append(f"  // Block {bid} Typ {t} noch nicht implementiert – wird übersprungen")
+
+        # 7-Segment BCD: falls jemand AO auf 0..15 führt und BCD vorhanden ist
+        if out.startswith('AO') and all(k in hw.get('pins',{}) for k in ["BCD_A","BCD_B","BCD_C","BCD_D"]):
+            lines.append("  // Optional: AO → BCD (niedrige 4 Bit)")
+            lines.append("  // Hinweis: Für echte BCD-Gabe eigener Block sinnvoller.")
+    return "\n".join(lines) + "\n"
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 generator_arduino.py <projekt.csv> [output_dir]")
+        print("Usage: python3 generator_arduino.py <projekt.csv|projekt.xml>")
         sys.exit(1)
-    
-    csv_file = sys.argv[1]
-    output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path('generated')
-    
-    print(f"🔧 Generiere Arduino Sketch aus: {csv_file}")
-    
-    # Parsen
-    blocks = parse_logo_csv(csv_file)
-    hw = load_hardware_profile()
-    
-    # Generieren
-    gen = ArduinoGenerator(hw)
-    project_name = Path(csv_file).stem
-    sketch = gen.generate_sketch(blocks, project_name)
-    
-    # Speichern
-    sketch_dir = output_dir / f"sketch_{project_name}"
-    sketch_dir.mkdir(parents=True, exist_ok=True)
-    
-    sketch_file = sketch_dir / f"{project_name}.ino"
-    with open(sketch_file, 'w') as f:
-        f.write(sketch)
-    
-    print(f"✅ Sketch gespeichert: {sketch_file}")
-    print(f"\n📊 Statistik:")
-    print(f"  Timer:     {len(gen.timers)}")
-    print(f"  Counter:   {len(gen.counters)}")
-    print(f"  Flipflops: {len(gen.flipflops)}")
-    print(f"\n🔨 Nächster Schritt:")
-    print(f"  arduino-cli compile --fqbn arduino:avr:uno {sketch_dir}")
+    in_file = sys.argv[1]
+    blocks = parse_blocks(in_file)
+    hw = load_hw()
 
-if __name__ == '__main__':
+    # Ausgaben
+    # Macros
+    print(emit_macros(hw), end="")
+    # Header + Pins
+    print(TEMPLATE_HEADER, end="")
+    print(emit_pins(hw))
+    print(TEMPLATE_FOOTER, end="")
+    # Globals
+    print(emit_globals(hw))
+    # Utilities
+    if all(k in hw.get('pins',{}) for k in ["BCD_A","BCD_B","BCD_C","BCD_D"]):
+        print(emit_bcd_write())
+    # Setup
+    print(emit_setup(hw))
+    # Loop
+    print(emit_loop_header())
+    print(gen_from_blocks(blocks, hw))
+    print(emit_loop_footer())
+
+if __name__ == "__main__":
     main()
+
